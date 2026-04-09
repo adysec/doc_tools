@@ -18,7 +18,7 @@
 
 ---
 
-<img width="1402" height="1068" alt="图片" src="https://github.com/user-attachments/assets/fbee7718-5f4d-4cdf-8ff2-c634a49839e7" />
+<img width="1608" height="1326" alt="图片" src="https://github.com/user-attachments/assets/dd7ce135-e94e-47ef-886a-1e42a7bcda06" />
 
 ## 🖥️ 使用方法
 
