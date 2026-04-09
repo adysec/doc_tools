@@ -1,6 +1,6 @@
 [package]
 name = "doc_tools"
-version = "1.0.0"
+version = "1.0.1"
 description = "文档处理工具"
 authors = ["AdySec"]
 edition = "2024"

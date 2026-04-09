@@ -3,6 +3,7 @@ use image::codecs::png::PngEncoder;
 use image::{ColorType, ImageEncoder, ImageReader};
 use regex::Regex;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::time::Instant;
@@ -44,7 +45,167 @@ struct OutlineResult {
     removed_heading_styles: u32,
     replaced_outline_levels: u32,
     inserted_outline_levels: u32,
+    removed_toc_index_blocks: u32,
+    removed_toc_index_fields: u32,
     elapsed_seconds: f32,
+}
+
+fn extract_heading_style_ids(styles_xml: &str) -> Result<HashSet<String>, String> {
+    let mut ids = HashSet::new();
+    for lvl in 1..=9 {
+        ids.insert(format!("Heading{lvl}"));
+    }
+
+    let style_block = Regex::new(r#"(?s)<w:style\b([^>]*)>(.*?)</w:style>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_type_attr = Regex::new(r#"\bw:type="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_id_attr = Regex::new(r#"\bw:styleId="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let based_on = Regex::new(r#"<w:basedOn\s+w:val="([^"]+)"\s*/>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_name = Regex::new(r#"<w:name\s+w:val="([^"]+)"\s*/>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+
+    for cap in style_block.captures_iter(styles_xml) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let style_type = style_type_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .unwrap_or_default();
+        if style_type != "paragraph" {
+            continue;
+        }
+
+        let style_id = style_id_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if style_id.is_empty() {
+            continue;
+        }
+
+        let block = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+
+        let has_outline_level = block.contains("<w:outlineLvl");
+        let based_on_heading = based_on
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .map(|v| {
+                let upper = v.to_ascii_uppercase();
+                upper.starts_with("HEADING") || upper.starts_with("TITLE")
+            })
+            .unwrap_or(false);
+        let name_heading = style_name
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_lowercase())
+            .map(|v| v.contains("heading") || v.contains("标题"))
+            .unwrap_or(false);
+
+        if has_outline_level || based_on_heading || name_heading {
+            ids.insert(style_id);
+        }
+    }
+
+    Ok(ids)
+}
+
+#[derive(Default, Clone)]
+struct StyleDirectFormat {
+    ppr_inner: String,
+    rpr_inner: String,
+}
+
+fn extract_default_paragraph_style_id(styles_xml: &str) -> Result<Option<String>, String> {
+    let style_block = Regex::new(r#"(?s)<w:style\b([^>]*)>(.*?)</w:style>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_type_attr = Regex::new(r#"\bw:type="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_id_attr = Regex::new(r#"\bw:styleId="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let default_attr = Regex::new(r#"\bw:default="1""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+
+    for cap in style_block.captures_iter(styles_xml) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let style_type = style_type_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .unwrap_or_default();
+        if style_type != "paragraph" || !default_attr.is_match(attrs) {
+            continue;
+        }
+        let style_id = style_id_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string());
+        if style_id.is_some() {
+            return Ok(style_id);
+        }
+    }
+    Ok(None)
+}
+
+fn extract_heading_style_direct_formats(
+    styles_xml: &str,
+    heading_style_ids: &HashSet<String>,
+) -> Result<HashMap<String, StyleDirectFormat>, String> {
+    let style_block = Regex::new(r#"(?s)<w:style\b([^>]*)>(.*?)</w:style>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_type_attr = Regex::new(r#"\bw:type="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let style_id_attr = Regex::new(r#"\bw:styleId="([^"]+)""#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let ppr_block = Regex::new(r#"(?s)<w:pPr\b[^>]*>(.*?)</w:pPr>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let rpr_block = Regex::new(r#"(?s)<w:rPr\b[^>]*>(.*?)</w:rPr>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+
+    let mut map = HashMap::new();
+    for cap in style_block.captures_iter(styles_xml) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let style_type = style_type_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .unwrap_or_default();
+        if style_type != "paragraph" {
+            continue;
+        }
+
+        let Some(style_id) = style_id_attr
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+        else {
+            continue;
+        };
+
+        if !heading_style_ids.contains(&style_id) {
+            continue;
+        }
+
+        let inner = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+        let ppr_inner = ppr_block
+            .captures(inner)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
+        let rpr_inner = rpr_block
+            .captures(inner)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
+
+        map.insert(style_id, StyleDirectFormat { ppr_inner, rpr_inner });
+    }
+    Ok(map)
 }
 
 #[derive(Serialize, Clone)]
@@ -434,15 +595,87 @@ fn remove_docx_outline_impl(input_path: String, output_path: String) -> Result<O
     let source = File::open(&input_path).map_err(|e| format!("无法打开输入文件: {e}"))?;
     let mut archive = ZipArchive::new(source).map_err(|e| format!("DOCX 解析失败: {e}"))?;
 
-    let heading_style = Regex::new(r#"<w:pStyle\s+w:val="Heading[0-9]+"\s*/>"#)
-        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let mut heading_style_ids = if let Ok(mut styles_entry) = archive.by_name("word/styles.xml") {
+        let mut styles_data = Vec::new();
+        styles_entry
+            .read_to_end(&mut styles_data)
+            .map_err(|e| format!("读取 styles.xml 失败: {e}"))?;
+        let styles_content = String::from_utf8(styles_data)
+            .map_err(|e| format!("读取 styles.xml 失败: {e}"))?;
+        extract_heading_style_ids(&styles_content)?
+    } else {
+        HashSet::new()
+    };
+    for lvl in 1..=9 {
+        heading_style_ids.insert(format!("Heading{lvl}"));
+    }
+    let mut default_paragraph_style_id: Option<String> = None;
+    let mut heading_style_formats: HashMap<String, StyleDirectFormat> = HashMap::new();
+    if let Ok(mut styles_entry) = archive.by_name("word/styles.xml") {
+        let mut styles_data = Vec::new();
+        styles_entry
+            .read_to_end(&mut styles_data)
+            .map_err(|e| format!("读取 styles.xml 失败: {e}"))?;
+        let styles_content = String::from_utf8(styles_data)
+            .map_err(|e| format!("读取 styles.xml 失败: {e}"))?;
+        default_paragraph_style_id = extract_default_paragraph_style_id(&styles_content)?;
+        heading_style_formats =
+            extract_heading_style_direct_formats(&styles_content, &heading_style_ids)?;
+    }
+
+    let mut escaped_style_ids: Vec<String> = heading_style_ids
+        .iter()
+        .map(|id| regex::escape(id))
+        .collect();
+    escaped_style_ids.sort();
+    let heading_style_ref = if escaped_style_ids.is_empty() {
+        Regex::new(r#"$^"#).map_err(|e| format!("正则编译失败: {e}"))?
+    } else {
+        Regex::new(&format!(
+            r#"<w:pStyle\b[^>]*\bw:val="(?:{})"[^>]*/?>"#,
+            escaped_style_ids.join("|")
+        ))
+        .map_err(|e| format!("正则编译失败: {e}"))?
+    };
+
     let outline_lvl = Regex::new(r#"<w:outlineLvl\s+w:val="[0-9]+"\s*/>"#)
         .map_err(|e| format!("正则编译失败: {e}"))?;
-    let ppr_open = Regex::new(r#"(<w:pPr>)"#).map_err(|e| format!("正则编译失败: {e}"))?;
+    let paragraph_block = Regex::new(r#"(?s)<w:p\b[^>]*>.*?</w:p>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let p_open = Regex::new(r#"<w:p\b[^>]*>"#).map_err(|e| format!("正则编译失败: {e}"))?;
+    let ppr_block = Regex::new(r#"(?s)<w:pPr\b[^>]*>(.*?)</w:pPr>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let rpr_block = Regex::new(r#"(?s)<w:rPr\b[^>]*>(.*?)</w:rPr>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let run_block = Regex::new(r#"(?s)<w:r\b[^>]*>.*?</w:r>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let run_open = Regex::new(r#"<w:r\b[^>]*>"#).map_err(|e| format!("正则编译失败: {e}"))?;
+    let text_run = Regex::new(r#"(?s)<w:t\b[^>]*>.*?</w:t>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let pstyle_tag = Regex::new(r#"<w:pStyle\b[^>]*\bw:val="[^"]+"[^>]*/?>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let pstyle_val = Regex::new(r#"<w:pStyle\b[^>]*\bw:val="([^"]+)"[^>]*/?>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let toc_index_field_simple = Regex::new(
+        r#"(?is)<w:fldSimple\b[^>]*w:instr="[^"]*(?:TOC|INDEX|TC|XE)[^"]*"[^>]*>(.*?)</w:fldSimple>"#,
+    )
+    .map_err(|e| format!("正则编译失败: {e}"))?;
+    let toc_index_instr_text = Regex::new(
+        r#"(?is)<w:instrText\b[^>]*>[^<]*(?:TOC|INDEX|TC|XE)[^<]*</w:instrText>"#,
+    )
+    .map_err(|e| format!("正则编译失败: {e}"))?;
+    let fld_char = Regex::new(r#"<w:fldChar\b[^>]*/>"#).map_err(|e| format!("正则编译失败: {e}"))?;
+    let sdt_pr = Regex::new(r#"(?is)<w:sdtPr\b[^>]*>.*?</w:sdtPr>"#)
+        .map_err(|e| format!("正则编译失败: {e}"))?;
+    let sdt_open_close = Regex::new(r#"</?w:sdt\b[^>]*>"#).map_err(|e| format!("正则编译失败: {e}"))?;
+    let sdt_content_open_close = Regex::new(r#"</?w:sdtContent\b[^>]*>"#)
+    .map_err(|e| format!("正则编译失败: {e}"))?;
 
     let mut removed_heading_styles = 0u32;
     let mut replaced_outline_levels = 0u32;
     let mut inserted_outline_levels = 0u32;
+    let mut removed_toc_index_blocks = 0u32;
+    let mut removed_toc_index_fields = 0u32;
     let mut buffer = Cursor::new(Vec::new());
 
     {
@@ -458,20 +691,171 @@ fn remove_docx_outline_impl(input_path: String, output_path: String) -> Result<O
                 .read_to_end(&mut data)
                 .map_err(|e| format!("读取文件数据失败: {e}"))?;
 
-            if name == "word/document.xml" {
-                let content = String::from_utf8(data)
-                    .map_err(|e| format!("读取 document.xml 失败: {e}"))?;
+            if name == "word/document.xml" || name == "word/styles.xml" {
+                let content = String::from_utf8(data).map_err(|e| format!("读取 {name} 失败: {e}"))?;
 
-                removed_heading_styles += heading_style.find_iter(&content).count() as u32;
-                let cleaned = heading_style.replace_all(&content, "");
+                let cleaned = if name == "word/styles.xml" {
+                    content
+                } else {
+                    paragraph_block
+                        .replace_all(&content, |caps: &regex::Captures| {
+                            let para = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+                            if !heading_style_ref.is_match(para) {
+                                return para.to_string();
+                            }
 
-                replaced_outline_levels += outline_lvl.find_iter(&cleaned).count() as u32;
-                let cleaned = outline_lvl.replace_all(&cleaned, "<w:outlineLvl w:val=\"9\"/>");
+                            let Some(style_id) = pstyle_val
+                                .captures(para)
+                                .and_then(|c| c.get(1))
+                                .map(|m| m.as_str().to_string())
+                            else {
+                                return para.to_string();
+                            };
+                            if !heading_style_ids.contains(&style_id) {
+                                return para.to_string();
+                            }
 
-                inserted_outline_levels += ppr_open.find_iter(&cleaned).count() as u32;
-                let cleaned = ppr_open.replace_all(&cleaned, "$1<w:outlineLvl w:val=\"9\"/>");
+                            removed_heading_styles += 1;
+                            let mut updated = para.to_string();
 
-                data = cleaned.into_owned().into_bytes();
+                            if let Some(default_id) = default_paragraph_style_id.as_ref() {
+                                updated = pstyle_tag
+                                    .replace_all(
+                                        &updated,
+                                        format!("<w:pStyle w:val=\"{default_id}\"/>").as_str(),
+                                    )
+                                    .into_owned();
+                            } else {
+                                updated = pstyle_tag.replace_all(&updated, "").into_owned();
+                            }
+
+                            let fmt = heading_style_formats.get(&style_id).cloned().unwrap_or_default();
+                            let existing_outline = outline_lvl.find_iter(&updated).count() as u32;
+                            replaced_outline_levels += existing_outline;
+
+                            let mut merged_ppr = fmt.ppr_inner;
+                            let existing_ppr = ppr_block
+                                .captures(&updated)
+                                .and_then(|c| c.get(1))
+                                .map(|m| m.as_str().to_string())
+                                .unwrap_or_default();
+                            if !existing_ppr.is_empty() {
+                                merged_ppr.push_str(&existing_ppr);
+                            }
+                            merged_ppr = pstyle_tag.replace_all(&merged_ppr, "").into_owned();
+                            merged_ppr = outline_lvl.replace_all(&merged_ppr, "").into_owned();
+
+                            // Keep numbering label appearance by applying heading rPr at paragraph level too.
+                            if !fmt.rpr_inner.is_empty() {
+                                let existing_para_rpr = rpr_block
+                                    .captures(&merged_ppr)
+                                    .and_then(|c| c.get(1))
+                                    .map(|m| m.as_str().to_string())
+                                    .unwrap_or_default();
+                                let mut merged_para_rpr = fmt.rpr_inner.clone();
+                                if !existing_para_rpr.is_empty() {
+                                    merged_para_rpr.push_str(&existing_para_rpr);
+                                }
+                                if rpr_block.is_match(&merged_ppr) {
+                                    merged_ppr = rpr_block
+                                        .replacen(
+                                            &merged_ppr,
+                                            1,
+                                            format!("<w:rPr>{merged_para_rpr}</w:rPr>").as_str(),
+                                        )
+                                        .into_owned();
+                                } else {
+                                    merged_ppr.push_str(&format!("<w:rPr>{merged_para_rpr}</w:rPr>"));
+                                }
+                            }
+
+                            merged_ppr.push_str("<w:outlineLvl w:val=\"9\"/>");
+                            inserted_outline_levels += 1;
+
+                            if ppr_block.is_match(&updated) {
+                                updated = ppr_block
+                                    .replacen(
+                                        &updated,
+                                        1,
+                                        format!("<w:pPr>{merged_ppr}</w:pPr>").as_str(),
+                                    )
+                                    .into_owned();
+                            } else {
+                                updated = p_open
+                                    .replacen(
+                                        &updated,
+                                        1,
+                                        format!("$0<w:pPr>{merged_ppr}</w:pPr>").as_str(),
+                                    )
+                                    .into_owned();
+                            }
+
+                            if !fmt.rpr_inner.is_empty() {
+                                updated = run_block
+                                    .replace_all(&updated, |run_caps: &regex::Captures| {
+                                        let run = run_caps
+                                            .get(0)
+                                            .map(|m| m.as_str())
+                                            .unwrap_or_default();
+                                        if !text_run.is_match(run) {
+                                            return run.to_string();
+                                        }
+
+                                        if rpr_block.is_match(run) {
+                                            let existing_rpr = rpr_block
+                                                .captures(run)
+                                                .and_then(|c| c.get(1))
+                                                .map(|m| m.as_str())
+                                                .unwrap_or_default();
+                                            let merged_rpr = format!("{}{}", fmt.rpr_inner, existing_rpr);
+                                            rpr_block
+                                                .replacen(
+                                                    run,
+                                                    1,
+                                                    format!("<w:rPr>{merged_rpr}</w:rPr>").as_str(),
+                                                )
+                                                .into_owned()
+                                        } else {
+                                            run_open
+                                                .replacen(
+                                                    run,
+                                                    1,
+                                                    format!("$0<w:rPr>{}</w:rPr>", fmt.rpr_inner).as_str(),
+                                                )
+                                                .into_owned()
+                                        }
+                                    })
+                                    .into_owned();
+                            }
+
+                            updated
+                        })
+                        .into_owned()
+                };
+
+                let cleaned = if name == "word/document.xml" {
+                    removed_toc_index_fields += toc_index_field_simple.find_iter(&cleaned).count() as u32;
+                    let cleaned = toc_index_field_simple.replace_all(&cleaned, "$1");
+
+                    removed_toc_index_fields += toc_index_instr_text.find_iter(&cleaned).count() as u32;
+                    let cleaned = toc_index_instr_text.replace_all(&cleaned, "");
+
+                    removed_toc_index_fields += fld_char.find_iter(&cleaned).count() as u32;
+                    let cleaned = fld_char.replace_all(&cleaned, "");
+
+                    removed_toc_index_blocks += sdt_pr.find_iter(&cleaned).count() as u32;
+                    let cleaned = sdt_pr.replace_all(&cleaned, "");
+
+                    removed_toc_index_blocks += sdt_open_close.find_iter(&cleaned).count() as u32;
+                    let cleaned = sdt_open_close.replace_all(&cleaned, "");
+
+                    removed_toc_index_blocks += sdt_content_open_close.find_iter(&cleaned).count() as u32;
+                    sdt_content_open_close.replace_all(&cleaned, "").into_owned()
+                } else {
+                    cleaned
+                };
+
+                data = cleaned.into_bytes();
             }
 
             zip_writer
@@ -504,6 +888,8 @@ fn remove_docx_outline_impl(input_path: String, output_path: String) -> Result<O
         removed_heading_styles,
         replaced_outline_levels,
         inserted_outline_levels,
+        removed_toc_index_blocks,
+        removed_toc_index_fields,
         elapsed_seconds: timer.elapsed().as_secs_f32(),
     })
 }
