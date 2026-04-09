@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>文档处理工具</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <div class="app-shell">
+        <aside class="sidebar panel">
+          <header class="hero">
+            <img src="/assets/doc_tools.svg" class="logo tauri" alt="Tauri logo" />
+            <h1>文档处理工具</h1>
+            <p class="author-signature">by AdySec</p>
+          </header>
+
+          <nav class="tool-nav">
+            <button class="tool-tab is-active" data-tool="compress">word文档压缩</button>
+            <button class="tool-tab" data-tool="unlock">word文档解除编辑保护</button>
+            <button class="tool-tab" data-tool="watermark">word去水印</button>
+            <button class="tool-tab" data-tool="outline">word去除标题大纲</button>
+          </nav>
+        </aside>
+
+        <section class="content-area">
+          <div class="tool-view is-active" id="tool-compress">
+            <section class="panel">
+              <h2>word文档压缩</h2>
+              <div id="drop-zone" class="drop-zone">
+                将 .docx 文件拖到这里，自动填充输入/输出路径
+              </div>
+              <form id="compress-form" class="form-grid">
+                <label for="input-path">输入 DOCX 路径</label>
+                <input id="input-path" placeholder="例如: /home/user/demo.docx" required />
+
+                <label for="output-path">输出 DOCX 路径</label>
+                <input id="output-path" placeholder="例如: /home/user/demo_压缩后.docx" required />
+
+                <label for="quality">压缩质量 (1-100)</label>
+                <input id="quality" type="number" min="1" max="100" value="70" required />
+
+                <label for="max-width">最大宽度 (300-4000)</label>
+                <input id="max-width" type="number" min="300" max="4000" value="1280" required />
+
+                <button type="submit">开始压缩</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h2>运行结果</h2>
+              <p id="status" class="result">等待开始...</p>
+              <div id="timer-wrap" class="timer-wrap hidden">
+                <span>已耗时</span>
+                <strong id="elapsed-time">0.0 s</strong>
+              </div>
+              <ul id="result-list" class="meta-list hidden">
+                <li><span>原始大小</span><strong id="r-original">-</strong></li>
+                <li><span>压缩后大小</span><strong id="r-compressed">-</strong></li>
+                <li><span>耗时</span><strong id="r-time">-</strong></li>
+              </ul>
+            </section>
+          </div>
+
+          <div class="tool-view" id="tool-unlock">
+            <section class="panel">
+              <h2>word文档解除编辑保护</h2>
+              <div id="unlock-drop-zone" class="drop-zone">
+                将受保护的 .docx 文件拖到这里，自动填充输入/输出路径
+              </div>
+              <form id="unlock-form" class="form-grid">
+                <label for="unlock-input-path">输入 DOCX 路径</label>
+                <input id="unlock-input-path" placeholder="例如: /home/user/protected.docx" required />
+
+                <label for="unlock-output-path">输出 DOCX 路径</label>
+                <input id="unlock-output-path" placeholder="例如: /home/user/protected_unlocked.docx" required />
+
+                <button type="submit">开始解除保护</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h2>处理结果</h2>
+              <p id="unlock-status" class="result">等待开始...</p>
+              <div id="unlock-timer-wrap" class="timer-wrap hidden">
+                <span>已耗时</span>
+                <strong id="unlock-elapsed-time">0.0 s</strong>
+              </div>
+              <ul id="unlock-result-list" class="meta-list hidden">
+                <li><span>输出文件</span><strong id="u-output">-</strong></li>
+                <li><span>移除保护节点</span><strong id="u-rules">-</strong></li>
+                <li><span>耗时</span><strong id="u-time">-</strong></li>
+              </ul>
+            </section>
+          </div>
+
+          <div class="tool-view" id="tool-watermark">
+            <section class="panel">
+              <h2>word去水印</h2>
+              <div id="watermark-drop-zone" class="drop-zone">
+                将含水印的 .docx 文件拖到这里，自动填充输入/输出路径
+              </div>
+              <form id="watermark-form" class="form-grid">
+                <label for="watermark-input-path">输入 DOCX 路径</label>
+                <input id="watermark-input-path" placeholder="例如: /home/user/watermark.docx" required />
+
+                <label for="watermark-output-path">输出 DOCX 路径</label>
+                <input id="watermark-output-path" placeholder="例如: /home/user/watermark_nowatermark.docx" required />
+
+                <button type="submit">开始去水印</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h2>处理结果</h2>
+              <p id="watermark-status" class="result">等待开始...</p>
+              <div id="watermark-timer-wrap" class="timer-wrap hidden">
+                <span>已耗时</span>
+                <strong id="watermark-elapsed-time">0.0 s</strong>
+              </div>
+              <ul id="watermark-result-list" class="meta-list hidden">
+                <li><span>输出文件</span><strong id="w-output">-</strong></li>
+                <li><span>清空页眉数</span><strong id="w-headers">-</strong></li>
+                <li><span>耗时</span><strong id="w-time">-</strong></li>
+              </ul>
+            </section>
+          </div>
+
+          <div class="tool-view" id="tool-outline">
+            <section class="panel">
+              <h2>word去除标题大纲</h2>
+              <div id="outline-drop-zone" class="drop-zone">
+                将需要处理的 .docx 文件拖到这里，自动填充输入/输出路径
+              </div>
+              <form id="outline-form" class="form-grid">
+                <label for="outline-input-path">输入 DOCX 路径</label>
+                <input id="outline-input-path" placeholder="例如: /home/user/report.docx" required />
+
+                <label for="outline-output-path">输出 DOCX 路径</label>
+                <input id="outline-output-path" placeholder="例如: /home/user/report_no_outline.docx" required />
+
+                <button type="submit">开始去除标题大纲</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h2>处理结果</h2>
+              <p id="outline-status" class="result">等待开始...</p>
+              <div id="outline-timer-wrap" class="timer-wrap hidden">
+                <span>已耗时</span>
+                <strong id="outline-elapsed-time">0.0 s</strong>
+              </div>
+              <ul id="outline-result-list" class="meta-list hidden">
+                <li><span>输出文件</span><strong id="o-output">-</strong></li>
+                <li><span>移除标题样式</span><strong id="o-heading-styles">-</strong></li>
+                <li><span>耗时</span><strong id="o-time">-</strong></li>
+              </ul>
+            </section>
+          </div>
+
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
