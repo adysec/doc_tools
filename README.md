@@ -66,4 +66,12 @@ cargo tauri dev
 
 # Linux 打包
 cargo tauri build --no-bundle
+
+# Windows 交叉构建（no-bundle）
+cargo tauri build --target x86_64-pc-windows-gnu --no-bundle
 ```
+
+#### Windows 运行说明（重要）
+
+- Windows 下运行 `doc_tools.exe` 时，`WebView2Loader.dll` 必须与 `doc_tools.exe` 位于同一目录。  
+- 如果只拷贝了 `doc_tools.exe`，会出现“找不到 `webview2loader.dll`”错误。
